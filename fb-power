@@ -1,0 +1,99 @@
+#!/bin/bash
+# fb-power - power-saving switches for Cardputer Zero (run as root)
+#   fb-power lan on|off|status [wait]   USB hub + LAN adapter (~125 mA when powered)
+#   fb-power leds on|off                ACT LED
+#   fb-power cpu max <kHz>|gov <name>   CPU limits (saved in /etc/fb-power.conf, re-applied at boot)
+#   fb-power cpu apply|status
+#   fb-power oc set 1100|1200|1300 | off | status   overclock (own file, needs reboot)
+# "lan off wait" is used at boot: waits up to 30 s for the hub to enumerate.
+set -u
+CONF=/etc/fb-power.conf
+CPUDIR=/sys/devices/system/cpu/cpu0/cpufreq
+HUB_VID=05e3; HUB_PID=0610            # Genesys Logic hub that carries the USB LAN adapter
+
+find_hub() {
+    local d
+    for d in /sys/bus/usb/devices/*; do
+        [ -r "$d/idVendor" ] || continue
+        if [ "$(cat "$d/idVendor")" = "$HUB_VID" ] && [ "$(cat "$d/idProduct")" = "$HUB_PID" ]; then
+            echo "$d"; return 0
+        fi
+    done
+    return 1
+}
+
+case "${1:-}" in
+lan)
+    hub=""
+    tries=1; [ "${3:-}" = "wait" ] && tries=60
+    for ((i = 0; i < tries; i++)); do
+        hub=$(find_hub) && break
+        sleep 0.5
+    done
+    if [ -z "$hub" ]; then echo missing; [ "${2:-}" = "status" ] && exit 0; exit 1; fi
+    case "${2:-}" in
+    on)     echo 1 > "$hub/authorized"; echo on ;;
+    off)    echo 0 > "$hub/authorized"; echo off ;;
+    status) [ "$(cat "$hub/authorized")" = "1" ] && echo on || echo off ;;
+    *)      echo "usage: fb-power lan on|off|status [wait]" >&2; exit 2 ;;
+    esac ;;
+leds)
+    L=/sys/class/leds/ACT
+    case "${2:-}" in
+    off) echo none > $L/trigger; echo 0 > $L/brightness ;;
+    on)  echo actpwr > $L/trigger ;;
+    *)   echo "usage: fb-power leds on|off" >&2; exit 2 ;;
+    esac ;;
+cpu)
+    save() { touch "$CONF"; sed -i "/^$1=/d" "$CONF"; echo "$1=$2" >> "$CONF"; }
+    set_max() {
+        grep -qw "$1" "$CPUDIR/scaling_available_frequencies" || { echo "bad frequency: $1" >&2; return 1; }
+        for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do echo "$1" > "$f"; done
+    }
+    set_gov() {
+        grep -qw "$1" "$CPUDIR/scaling_available_governors" || { echo "bad governor: $1" >&2; return 1; }
+        for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo "$1" > "$f"; done
+    }
+    case "${2:-}" in
+    max)    set_max "${3:-}" && save CPU_MAX "$3" && echo "max $3" ;;
+    gov)    set_gov "${3:-}" && save GOVERNOR "$3" && echo "governor $3" ;;
+    apply)  [ -r "$CONF" ] || exit 0
+            # shellcheck disable=SC1090
+            . "$CONF"
+            [ -n "${GOVERNOR:-}" ] && set_gov "$GOVERNOR"
+            [ -n "${CPU_MAX:-}" ] && set_max "$CPU_MAX"
+            exit 0 ;;
+    status) echo "$(cat $CPUDIR/scaling_governor) $(cat $CPUDIR/scaling_max_freq) $(cat $CPUDIR/scaling_cur_freq)" ;;
+    *)      echo "usage: fb-power cpu max <kHz>|gov <name>|apply|status" >&2; exit 2 ;;
+    esac ;;
+oc)
+    # Overclock lives in its own file; config.txt only gets ONE "include" line (backup kept).
+    # Recovery if a level does not boot: put the SD card in a PC and empty /boot/firmware/fb-oc.txt.
+    OCF=/boot/firmware/fb-oc.txt; CFGTXT=/boot/firmware/config.txt
+    ensure_inc() {
+        grep -q '^include fb-oc.txt' "$CFGTXT" && return 0
+        cp "$CFGTXT" "$CFGTXT.bak-before-fb-oc"
+        printf '\n# overclock profile managed by fb-power (empty /boot/firmware/fb-oc.txt to undo)\ninclude fb-oc.txt\n' >> "$CFGTXT"
+    }
+    case "${2:-}" in
+    set)
+        case "${3:-}" in
+        1100) ov=2 ;;
+        1200) ov=3 ;;
+        1300) ov=5 ;;
+        *) echo "bad level (1100|1200|1300)" >&2; exit 1 ;;
+        esac
+        ensure_inc
+        printf '# written by fb-power\narm_freq=%s\nover_voltage=%s\n' "$3" "$ov" > "$OCF"
+        sync; echo "overclock $3 set - reboot to apply" ;;
+    off)
+        ensure_inc
+        printf '# overclock off (written by fb-power)\n' > "$OCF"
+        sync; echo "overclock off - reboot to apply" ;;
+    status)
+        if [ -r "$OCF" ] && grep -q '^arm_freq=' "$OCF"; then grep '^arm_freq=' "$OCF" | cut -d= -f2; else echo off; fi ;;
+    *)  echo "usage: fb-power oc set 1100|1200|1300 | off | status" >&2; exit 2 ;;
+    esac ;;
+*)
+    echo "usage: fb-power lan on|off|status [wait] | leds on|off | cpu ... | oc ..." >&2; exit 2 ;;
+esac

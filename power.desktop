@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Power
+Exec=/usr/bin/python3 /opt/cardputer-zero-tools/power.py
+Icon=share/images/cardputer-zero-power.png
+Terminal=false

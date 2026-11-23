@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Hotspot
+Exec=/usr/bin/python3 /opt/cardputer-zero-tools/hotspot.py
+Icon=share/images/cardputer-zero-hotspot.png
+Terminal=false

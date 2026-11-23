@@ -1,0 +1,15 @@
+[Unit]
+Description=Cardputer power saving (USB LAN adapter and ACT LED off at boot)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=60
+ExecStart=/usr/local/sbin/fb-power lan off wait
+ExecStart=/usr/local/sbin/fb-power leds off
+ExecStart=-/usr/local/sbin/fb-power cpu apply
+ExecStop=-/usr/local/sbin/fb-power lan on
+ExecStop=-/usr/local/sbin/fb-power leds on
+
+[Install]
+WantedBy=multi-user.target
